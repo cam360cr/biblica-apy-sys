@@ -38,7 +38,7 @@ En PowerShell puede usar:
 
 1. Copy-Item .env.example .env
 
-La aplicación queda en http://localhost:3000
+La aplicación queda en http://localhost:2934
 
 ## Variables de entorno
 
@@ -56,7 +56,7 @@ APP_ADMIN_PASSWORD=admin123
 APP_SELLER_USER=vendedor
 APP_SELLER_PASSWORD=vendedor123
 SESSION_SECRET=colocar_un_secreto_largo_aqui
-PORT=3000
+PORT=2934
 
 HCB_INTEGRATION_MODE controla el tipo de prueba:
 

@@ -39,7 +39,7 @@ const {
 } = require("./src/auth");
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 2934;
 
 app.use(
   helmet({
