@@ -1,0 +1,8 @@
+hcb-basicos-app/node_modules/
+hcb-basicos-app/.env
+hcb-basicos-app/database.sqlite
+hcb-basicos-app/database.sqlite-shm
+hcb-basicos-app/database.sqlite-wal
+hcb-basicos-app/build/
+hcb-basicos-app/build.zip
+*.log

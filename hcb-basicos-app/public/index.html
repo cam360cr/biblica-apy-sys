@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Registro de Básicos</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="background-shape shape-left" aria-hidden="true"></div>
+    <div class="background-shape shape-right" aria-hidden="true"></div>
+
+    <main class="app-wrapper">
+      <section class="panel">
+        <header class="panel-header">
+          <h1>Registro de Básicos</h1>
+        </header>
+
+        <section id="auth-section" class="auth-section">
+          <h2>Iniciar sesión</h2>
+          <form id="login-form" class="login-form" novalidate>
+            <div class="field-block">
+              <label for="username">Usuario</label>
+              <input id="username" name="username" type="text" autocomplete="username" />
+            </div>
+
+            <div class="field-block">
+              <label for="password">Contraseña</label>
+              <input
+                id="password"
+                name="password"
+                type="password"
+                autocomplete="current-password"
+              />
+            </div>
+
+            <button id="login-btn" type="submit" class="primary-btn">Entrar</button>
+          </form>
+          <section id="login-status" class="status info" role="status" aria-live="polite">
+            Ingrese sus credenciales para continuar.
+          </section>
+        </section>
+
+        <section id="app-section" class="hidden">
+          <div class="session-bar">
+            <div class="session-info">
+              <strong id="user-name">-</strong>
+              <span id="user-role" class="role-pill">-</span>
+            </div>
+            <button id="logout-btn" type="button" class="secondary-btn">Cerrar sesión</button>
+          </div>
+
+          <form id="registro-form" class="codigo-form" novalidate>
+            <div id="entry-grid" class="entry-grid single-mode">
+              <div class="field-block field-code">
+                <label for="codigo">Código de empleado</label>
+                <div class="codigo-input-row">
+                  <input
+                    id="codigo"
+                    name="codigo"
+                    type="text"
+                    inputmode="numeric"
+                    autocomplete="off"
+                    spellcheck="false"
+                    maxlength="30"
+                    placeholder="Ejemplo: 5294"
+                  />
+                  <button
+                    id="scan-demo-btn"
+                    type="button"
+                    class="scan-icon-btn"
+                    title="Escanear código de barras"
+                    aria-label="Escanear código de barras"
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      width="20"
+                      height="20"
+                      aria-hidden="true"
+                      focusable="false"
+                    >
+                      <path
+                        d="M9 5L10.5 3H13.5L15 5H18C19.1 5 20 5.9 20 7V17C20 18.1 19.1 19 18 19H6C4.9 19 4 18.1 4 17V7C4 5.9 4.9 5 6 5H9ZM12 16.2C14.32 16.2 16.2 14.32 16.2 12C16.2 9.68 14.32 7.8 12 7.8C9.68 7.8 7.8 9.68 7.8 12C7.8 14.32 9.68 16.2 12 16.2ZM12 14.8C10.45 14.8 9.2 13.55 9.2 12C9.2 10.45 10.45 9.2 12 9.2C13.55 9.2 14.8 10.45 14.8 12C14.8 13.55 13.55 14.8 12 14.8Z"
+                        fill="currentColor"
+                      />
+                    </svg>
+                  </button>
+                  <button id="verify-code-btn" type="button" class="secondary-btn verify-code-btn">
+                    Verificar código
+                  </button>
+                </div>
+              </div>
+
+            </div>
+          </form>
+
+          <section
+            id="employee-check-status"
+            class="status info hidden"
+            role="status"
+            aria-live="polite"
+          ></section>
+
+          <section id="consumos-section" class="consumos-section hidden" aria-label="Tipos de consumo">
+            <div id="consumos-grid" class="consumos-grid"></div>
+          </section>
+
+          <section id="status" class="status info hidden" role="status" aria-live="polite"></section>
+
+          <section id="admin-panel" class="admin-panel hidden">
+            <div class="historial-header">
+              <h2>Historial y exportación</h2>
+            </div>
+
+            <form id="filters-form" class="filters-grid" novalidate>
+              <div class="field-block">
+                <label for="filter-desde">Desde</label>
+                <input id="filter-desde" type="date" />
+              </div>
+
+              <div class="field-block">
+                <label for="filter-hasta">Hasta</label>
+                <input id="filter-hasta" type="date" />
+              </div>
+
+              <div class="field-block">
+                <label for="filter-codigo">Código</label>
+                <input id="filter-codigo" type="text" placeholder="Digite código de empleado" />
+              </div>
+
+              <div class="field-block">
+                <label for="filter-nombre">Nombre</label>
+                <input id="filter-nombre" type="text" placeholder="Digite nombre de empleado" />
+              </div>
+
+              <div class="field-block">
+                <label for="filter-consumo">Consumo</label>
+                <select id="filter-consumo">
+                  <option value="">Todos</option>
+                </select>
+              </div>
+
+              <div class="field-block">
+                <label for="filter-estado">Estado</label>
+                <select id="filter-estado">
+                  <option value="">Todos</option>
+                  <option value="exitoso">Exitoso</option>
+                  <option value="fallido">Fallido</option>
+                </select>
+              </div>
+
+              <div class="filter-actions">
+                <button id="filter-btn" type="submit" class="primary-btn">Filtrar</button>
+                <button id="clear-filters-btn" type="button" class="secondary-btn">Limpiar</button>
+                <button id="export-btn" type="button" class="accent-btn">Exportar Excel</button>
+              </div>
+            </form>
+
+            <div class="admin-toolbar">
+              <div class="admin-tabs" role="tablist" aria-label="Historial de transacciones">
+                <button
+                  id="tab-active-btn"
+                  type="button"
+                  class="tab-btn is-active"
+                  role="tab"
+                  aria-controls="active-tab-panel"
+                  aria-selected="true"
+                >
+                  Activos
+                </button>
+                <button
+                  id="tab-deleted-btn"
+                  type="button"
+                  class="tab-btn"
+                  role="tab"
+                  aria-controls="deleted-tab-panel"
+                  aria-selected="false"
+                >
+                  Eliminados
+                </button>
+              </div>
+
+              <div class="page-size-wrap">
+                <label for="page-size-select">Mostrar</label>
+                <select id="page-size-select">
+                  <option value="10" selected>10</option>
+                  <option value="20">20</option>
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                </select>
+              </div>
+            </div>
+
+            <section
+              id="active-tab-panel"
+              class="admin-tab-panel"
+              role="tabpanel"
+              aria-labelledby="tab-active-btn"
+            >
+              <div class="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Fecha</th>
+                      <th>Nombre</th>
+                      <th>Código</th>
+                      <th>Consumo</th>
+                      <th>Monto</th>
+                      <th>Estado</th>
+                      <th>Transacción</th>
+                      <th>Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody id="history-body">
+                    <tr>
+                      <td colspan="8" class="empty-row">Sin datos para mostrar.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="pagination-controls">
+                <button id="active-prev-page-btn" type="button" class="secondary-btn">Anterior</button>
+                <span id="active-page-info" class="page-info">Página 1 de 1</span>
+                <button id="active-next-page-btn" type="button" class="secondary-btn">Siguiente</button>
+              </div>
+            </section>
+
+            <section
+              id="deleted-tab-panel"
+              class="admin-tab-panel hidden"
+              role="tabpanel"
+              aria-labelledby="tab-deleted-btn"
+            >
+              <div class="table-container">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Fecha</th>
+                      <th>Eliminado En</th>
+                      <th>Nombre</th>
+                      <th>Código</th>
+                      <th>Consumo</th>
+                      <th>Monto</th>
+                      <th>Transacción</th>
+                      <th>Eliminado Por</th>
+                    </tr>
+                  </thead>
+                  <tbody id="deleted-history-body">
+                    <tr>
+                      <td colspan="8" class="empty-row">Sin transacciones eliminadas.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="pagination-controls">
+                <button id="deleted-prev-page-btn" type="button" class="secondary-btn">Anterior</button>
+                <span id="deleted-page-info" class="page-info">Página 1 de 1</span>
+                <button id="deleted-next-page-btn" type="button" class="secondary-btn">Siguiente</button>
+              </div>
+            </section>
+          </section>
+        </section>
+
+        <section id="scan-modal" class="scan-modal hidden" role="dialog" aria-modal="true" aria-labelledby="scan-modal-title">
+          <div class="scan-modal-card">
+            <div class="scan-modal-header">
+              <h3 id="scan-modal-title">Escanear código de barras</h3>
+              <button id="scan-modal-close" type="button" class="secondary-btn">Cerrar</button>
+            </div>
+
+            <div class="scan-preview" aria-live="polite">
+              <video id="scan-video" class="scan-video" autoplay muted playsinline></video>
+              <div class="scan-line"></div>
+              <span class="scan-preview-label">Apunte al código del carné</span>
+            </div>
+
+            <p id="scan-modal-status" class="status info scan-modal-status" role="status" aria-live="polite">
+              Solicitando acceso a la cámara...
+            </p>
+
+            <button id="scan-modal-action" type="button" class="primary-btn">Ingresar código manualmente</button>
+          </div>
+        </section>
+
+        <section
+          id="purchase-confirm-modal"
+          class="scan-modal hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="purchase-confirm-title"
+        >
+          <div class="scan-modal-card purchase-confirm-card">
+            <div class="scan-modal-header">
+              <h3 id="purchase-confirm-title">Confirmar compra</h3>
+              <button id="purchase-confirm-close" type="button" class="secondary-btn">Cerrar</button>
+            </div>
+
+            <p class="scan-modal-text">
+              Revise los datos antes de confirmar la compra.
+            </p>
+
+            <div class="purchase-summary" aria-live="polite">
+              <div class="purchase-summary-row">
+                <span>Cliente</span>
+                <strong id="purchase-confirm-cliente">-</strong>
+              </div>
+              <div class="purchase-summary-row">
+                <span>Consumo</span>
+                <strong id="purchase-confirm-consumo">-</strong>
+              </div>
+              <div class="purchase-summary-row">
+                <span>Monto</span>
+                <strong id="purchase-confirm-monto">-</strong>
+              </div>
+            </div>
+
+            <div class="purchase-confirm-actions">
+              <button id="purchase-confirm-cancel" type="button" class="secondary-btn">Cancelar</button>
+              <button id="purchase-confirm-accept" type="button" class="primary-btn">Aceptar compra</button>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

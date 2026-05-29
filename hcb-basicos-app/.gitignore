@@ -1,0 +1,8 @@
+node_modules/
+.env
+npm-debug.log*
+database.sqlite
+database.sqlite-shm
+database.sqlite-wal
+build/
+build.zip

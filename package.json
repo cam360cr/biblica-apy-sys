@@ -1,0 +1,9 @@
+{
+  "name": "biblica-api-sys",
+  "private": true,
+  "scripts": {
+    "start": "npm --prefix ./hcb-basicos-app start",
+    "dev": "npm --prefix ./hcb-basicos-app run dev",
+    "install:app": "npm --prefix ./hcb-basicos-app install"
+  }
+}
