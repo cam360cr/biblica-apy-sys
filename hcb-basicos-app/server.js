@@ -21,12 +21,15 @@ const {
   saveTransaction,
   getTransactions,
   getTransactionsPaged,
+  getAuditLogsPaged,
   getTransactionById,
   softDeleteTransaction,
   getSuccessfulConsumptionsForDate,
   getTransactionsPendingNeonSync,
   markTransactionSyncedForNeon,
-  markTransactionSyncFailedForNeon
+  markTransactionSyncFailedForNeon,
+  saveAuditLog,
+  getAuditLogsAfterId
 } = require("./src/db");
 const { createNeonSyncWorker } = require("./src/neonSync");
 const {
@@ -47,7 +50,8 @@ const PORT = Number(process.env.PORT) || 2934;
 const neonSyncWorker = createNeonSyncWorker({
   getTransactionsPendingNeonSync,
   markTransactionSyncedForNeon,
-  markTransactionSyncFailedForNeon
+  markTransactionSyncFailedForNeon,
+  getAuditLogsAfterId
 });
 
 function resolveZxingUmdDirectory() {
@@ -391,6 +395,57 @@ function buildHistorialFilters(query) {
   };
 }
 
+function normalizeAuditLevel(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["info", "warn", "error"].includes(normalized)) {
+    return normalized;
+  }
+
+  return "";
+}
+
+function normalizeAuditLimit(value) {
+  const parsed = parsePositiveInt(value, 20);
+  return Math.min(Math.max(parsed, 10), 200);
+}
+
+function buildAuditFilters(query) {
+  return {
+    startDate: parseDateFilter(query.desde || query.startDate, false),
+    endDate: parseDateFilter(query.hasta || query.endDate, true),
+    level: normalizeAuditLevel(query.level),
+    eventType: sanitizeFilterText(query.eventType).toLowerCase(),
+    username: sanitizeFilterText(query.username).toLowerCase(),
+    searchText: sanitizeFilterText(query.busqueda || query.search),
+    page: parsePositiveInt(query.page, 1),
+    limit: normalizeAuditLimit(query.limit)
+  };
+}
+
+function getRequestIp(req) {
+  const forwardedFor = String(req.headers?.["x-forwarded-for"] || "").trim();
+  if (forwardedFor) {
+    return forwardedFor.split(",")[0].trim();
+  }
+
+  return String(req.ip || req.socket?.remoteAddress || "").trim();
+}
+
+function buildAuditContext(req, extra = {}) {
+  const user = req.session?.user || null;
+
+  return {
+    level: "info",
+    success: true,
+    username: user?.username || "",
+    userRole: user?.role || "",
+    ip: getRequestIp(req),
+    method: req.method,
+    path: req.originalUrl || req.path,
+    ...extra
+  };
+}
+
 function toExcelRows(transactions) {
   return transactions.map((item) => ({
     Fecha: formatDateTimeCostaRica(item.fecha || item.created_at || ""),
@@ -571,16 +626,37 @@ async function persistTransactionSafely(transaction) {
   }
 }
 
+async function persistAuditLogSafely(entry) {
+  try {
+    await saveAuditLog(entry);
+  } catch (dbError) {
+    console.error("No se pudo guardar auditoria en SQLite:", dbError.message);
+  }
+}
+
+app.locals.auditLogger = persistAuditLogSafely;
+
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, service: "hcb-basicos-app" });
 });
 
 app.post("/api/auth/login", (req, res) => {
-  const username = req.body?.username;
+  const username = String(req.body?.username || "").trim().toLowerCase();
   const password = req.body?.password;
   const user = authenticateUser(username, password);
 
   if (!user) {
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "warn",
+        eventType: "auth.login.failed",
+        success: false,
+        username,
+        statusCode: 401,
+        detail: "Intento de inicio de sesion fallido por credenciales invalidas"
+      })
+    );
+
     return res.status(401).json({
       ok: false,
       message: "Credenciales invalidas"
@@ -588,6 +664,18 @@ app.post("/api/auth/login", (req, res) => {
   }
 
   req.session.user = user;
+  void persistAuditLogSafely(
+    buildAuditContext(req, {
+      level: "info",
+      eventType: "auth.login.success",
+      success: true,
+      username: user.username,
+      userRole: user.role,
+      statusCode: 200,
+      detail: "Inicio de sesion exitoso"
+    })
+  );
+
   return res.json({
     ok: true,
     data: getAuthUserResponse(user)
@@ -595,8 +683,44 @@ app.post("/api/auth/login", (req, res) => {
 });
 
 app.post("/api/auth/logout", ensureAuthenticated, (req, res) => {
-  req.session.destroy(() => {
+  const currentUser = req.session?.user || null;
+
+  req.session.destroy((error) => {
+    if (error) {
+      void persistAuditLogSafely(
+        buildAuditContext(req, {
+          level: "error",
+          eventType: "auth.logout.error",
+          success: false,
+          username: currentUser?.username || "",
+          userRole: currentUser?.role || "",
+          statusCode: 500,
+          detail: "No se pudo cerrar sesion",
+          metadata: {
+            error: String(error.message || "Error desconocido")
+          }
+        })
+      );
+
+      return res.status(500).json({
+        ok: false,
+        message: "No se pudo cerrar sesion"
+      });
+    }
+
     res.clearCookie("hcb.sid");
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "info",
+        eventType: "auth.logout.success",
+        success: true,
+        username: currentUser?.username || "",
+        userRole: currentUser?.role || "",
+        statusCode: 200,
+        detail: "Sesion finalizada"
+      })
+    );
+
     return res.json({
       ok: true,
       message: "Sesion finalizada"
@@ -606,6 +730,16 @@ app.post("/api/auth/logout", ensureAuthenticated, (req, res) => {
 
 app.get("/api/auth/me", (req, res) => {
   if (!req.session?.user) {
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "warn",
+        eventType: "auth.me.unauthorized",
+        success: false,
+        statusCode: 401,
+        detail: "Consulta de sesion sin usuario autenticado"
+      })
+    );
+
     return res.status(401).json({
       ok: false,
       message: "Sesion no iniciada"
@@ -629,6 +763,16 @@ app.post("/api/empleado/estado", ensureRole([ROLES.ADMIN, ROLES.SELLER]), async 
   const codigo = sanitizeCodigo(req.body?.codigo);
 
   if (!codigo) {
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "warn",
+        eventType: "empleado.estado.invalid_input",
+        success: false,
+        statusCode: 400,
+        detail: "Intento de validacion con codigo invalido"
+      })
+    );
+
     return res.status(400).json({
       ok: false,
       message: "Debe ingresar un codigo valido."
@@ -680,6 +824,32 @@ app.post("/api/empleado/estado", ensureRole([ROLES.ADMIN, ROLES.SELLER]), async 
     const snapshotCR = getCostaRicaTimeSnapshot(now);
     const consumoSlotActual = getCurrentConsumoSlot(now);
 
+    const eventType = !registrado
+      ? "empleado.estado.codigo_no_registrado"
+      : !activo
+      ? "empleado.estado.empleado_inactivo"
+      : puedeConsumir
+      ? "empleado.estado.validacion_exitosa"
+      : "empleado.estado.sin_disponibilidad";
+
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: puedeConsumir ? "info" : "warn",
+        eventType,
+        success: puedeConsumir,
+        statusCode: 200,
+        codigoEmpleado: codigo,
+        detail: mensajeEstado || "Validacion completada",
+        metadata: {
+          registrado,
+          activo,
+          puedeConsumir,
+          consumoReferencia: consumoSlotActual,
+          consumosDisponibles: consumos.filter((item) => item.disponible).map((item) => item.key)
+        }
+      })
+    );
+
     return res.json({
       ok: true,
       data: {
@@ -700,6 +870,20 @@ app.post("/api/empleado/estado", ensureRole([ROLES.ADMIN, ROLES.SELLER]), async 
       }
     });
   } catch (error) {
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "error",
+        eventType: "empleado.estado.error",
+        success: false,
+        statusCode: 500,
+        codigoEmpleado: codigo,
+        detail: getErrorMessage(error),
+        metadata: {
+          stack: String(error?.stack || "").slice(0, 3000)
+        }
+      })
+    );
+
     return res.status(500).json({
       ok: false,
       message: "No se pudo validar el codigo del empleado.",
@@ -713,6 +897,19 @@ app.post("/api/consumo", ensureRole([ROLES.ADMIN, ROLES.SELLER]), async (req, re
   const consumo = normalizeConsumo(req.body?.consumo);
 
   if (!codigo) {
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "warn",
+        eventType: "consumo.request.invalid_codigo",
+        success: false,
+        statusCode: 400,
+        detail: "Intento de consumo con codigo invalido",
+        metadata: {
+          consumo
+        }
+      })
+    );
+
     return res.status(400).json({
       ok: false,
       message: "Debe ingresar un codigo valido."
@@ -720,6 +917,20 @@ app.post("/api/consumo", ensureRole([ROLES.ADMIN, ROLES.SELLER]), async (req, re
   }
 
   if (!Object.prototype.hasOwnProperty.call(CONSUMOS, consumo)) {
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "warn",
+        eventType: "consumo.request.invalid_tipo",
+        success: false,
+        statusCode: 400,
+        codigoEmpleado: codigo,
+        detail: "Tipo de consumo no existe",
+        metadata: {
+          consumo
+        }
+      })
+    );
+
     return res.status(400).json({
       ok: false,
       message: "El tipo de consumo no existe."
@@ -730,6 +941,21 @@ app.post("/api/consumo", ensureRole([ROLES.ADMIN, ROLES.SELLER]), async (req, re
   const monto = Number(consumoConfig.monto);
 
   if (!Number.isFinite(monto) || monto <= 0) {
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "error",
+        eventType: "consumo.request.invalid_monto_config",
+        success: false,
+        statusCode: 500,
+        codigoEmpleado: codigo,
+        detail: "Monto configurado invalido para consumo",
+        metadata: {
+          consumo,
+          montoConfigurado: consumoConfig.monto
+        }
+      })
+    );
+
     return res.status(500).json({
       ok: false,
       message: "El monto configurado para este consumo no es valido."
@@ -777,6 +1003,22 @@ app.post("/api/consumo", ensureRole([ROLES.ADMIN, ROLES.SELLER]), async (req, re
         numero_transaccion: null
       });
 
+      void persistAuditLogSafely(
+        buildAuditContext(req, {
+          level: "warn",
+          eventType: "consumo.registro.denegado_api",
+          success: false,
+          statusCode: 403,
+          codigoEmpleado: codigo,
+          detail,
+          metadata: {
+            consumo,
+            registrado: remoteStatus?.registrado,
+            activo: remoteStatus?.activo
+          }
+        })
+      );
+
       return res.status(403).json({
         ok: false,
         message: "No autorizado para consumir",
@@ -797,6 +1039,21 @@ app.post("/api/consumo", ensureRole([ROLES.ADMIN, ROLES.SELLER]), async (req, re
         },
         numero_transaccion: null
       });
+
+      void persistAuditLogSafely(
+        buildAuditContext(req, {
+          level: "warn",
+          eventType: "consumo.registro.fuera_horario",
+          success: false,
+          statusCode: 409,
+          codigoEmpleado: codigo,
+          detail,
+          metadata: {
+            consumo,
+            horario: getConsumoHorarioLabel(consumo)
+          }
+        })
+      );
 
       return res.status(409).json({
         ok: false,
@@ -823,6 +1080,21 @@ app.post("/api/consumo", ensureRole([ROLES.ADMIN, ROLES.SELLER]), async (req, re
           numero_transaccion: null
         });
 
+        void persistAuditLogSafely(
+          buildAuditContext(req, {
+            level: "warn",
+            eventType: "consumo.registro.no_disponible_api",
+            success: false,
+            statusCode: 409,
+            codigoEmpleado: codigo,
+            detail,
+            metadata: {
+              consumo,
+              disponibilidadApi: disponibilidadApiConsumo
+            }
+          })
+        );
+
         return res.status(409).json({
           ok: false,
           message: "Consumo no disponible",
@@ -845,6 +1117,21 @@ app.post("/api/consumo", ensureRole([ROLES.ADMIN, ROLES.SELLER]), async (req, re
           },
           numero_transaccion: null
         });
+
+        void persistAuditLogSafely(
+          buildAuditContext(req, {
+            level: "error",
+            eventType: "consumo.registro.error_validacion_api",
+            success: false,
+            statusCode: 502,
+            codigoEmpleado: codigo,
+            detail,
+            metadata: {
+              consumo,
+              disponibilidadApi: disponibilidadApiConsumo
+            }
+          })
+        );
 
         return res.status(502).json({
           ok: false,
@@ -871,6 +1158,20 @@ app.post("/api/consumo", ensureRole([ROLES.ADMIN, ROLES.SELLER]), async (req, re
           numero_transaccion: null
         });
 
+        void persistAuditLogSafely(
+          buildAuditContext(req, {
+            level: "warn",
+            eventType: "consumo.registro.duplicado_local",
+            success: false,
+            statusCode: 409,
+            codigoEmpleado: codigo,
+            detail,
+            metadata: {
+              consumo
+            }
+          })
+        );
+
         return res.status(409).json({
           ok: false,
           message: "Consumo ya registrado hoy",
@@ -892,6 +1193,24 @@ app.post("/api/consumo", ensureRole([ROLES.ADMIN, ROLES.SELLER]), async (req, re
       respuesta_api: apiResponse.data,
       numero_transaccion: apiResponse.numeroTransaccion
     });
+
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "info",
+        eventType: "consumo.registro.exitoso",
+        success: true,
+        statusCode: 200,
+        codigoEmpleado: codigo,
+        numeroTransaccion: apiResponse.numeroTransaccion,
+        detail: "Consumo registrado correctamente",
+        metadata: {
+          consumo,
+          tipoBasico: consumoConfig.tipoBasico,
+          monto,
+          nombreEmpleado
+        }
+      })
+    );
 
     return res.json({
       ok: true,
@@ -926,6 +1245,21 @@ app.post("/api/consumo", ensureRole([ROLES.ADMIN, ROLES.SELLER]), async (req, re
       numero_transaccion: null
     });
 
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "error",
+        eventType: "consumo.registro.error",
+        success: false,
+        statusCode: status,
+        codigoEmpleado: codigo,
+        detail,
+        metadata: {
+          consumo,
+          stack: String(error?.stack || "").slice(0, 3000)
+        }
+      })
+    );
+
     return res.status(status).json({
       ok: false,
       message: "Error al registrar consumo",
@@ -938,6 +1272,23 @@ app.get("/api/historial", ensureRole([ROLES.ADMIN]), async (req, res) => {
   try {
     const filters = buildHistorialFilters(req.query);
     const paged = await getTransactionsPaged(filters);
+
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "info",
+        eventType: "historial.consulta",
+        success: true,
+        statusCode: 200,
+        detail: "Consulta de historial ejecutada",
+        metadata: {
+          filtros: filters,
+          total: paged.total,
+          page: paged.page,
+          limit: paged.limit
+        }
+      })
+    );
+
     return res.json({
       ok: true,
       data: paged.rows,
@@ -949,6 +1300,19 @@ app.get("/api/historial", ensureRole([ROLES.ADMIN]), async (req, res) => {
       }
     });
   } catch (error) {
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "error",
+        eventType: "historial.consulta.error",
+        success: false,
+        statusCode: 500,
+        detail: getErrorMessage(error),
+        metadata: {
+          stack: String(error?.stack || "").slice(0, 3000)
+        }
+      })
+    );
+
     return res.status(500).json({
       ok: false,
       message: "No se pudo cargar historial",
@@ -957,9 +1321,56 @@ app.get("/api/historial", ensureRole([ROLES.ADMIN]), async (req, res) => {
   }
 });
 
+app.get("/api/auditoria", ensureRole([ROLES.ADMIN]), async (req, res) => {
+  try {
+    const filters = buildAuditFilters(req.query);
+    const paged = await getAuditLogsPaged(filters);
+
+    return res.json({
+      ok: true,
+      data: paged.rows,
+      pagination: {
+        page: paged.page,
+        limit: paged.limit,
+        total: paged.total,
+        totalPages: paged.totalPages
+      }
+    });
+  } catch (error) {
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "error",
+        eventType: "auditoria.consulta.error",
+        success: false,
+        statusCode: 500,
+        detail: getErrorMessage(error),
+        metadata: {
+          stack: String(error?.stack || "").slice(0, 3000)
+        }
+      })
+    );
+
+    return res.status(500).json({
+      ok: false,
+      message: "No se pudo cargar auditoria",
+      detail: error.message
+    });
+  }
+});
+
 app.post("/api/transacciones/:id/eliminar", ensureRole([ROLES.ADMIN]), async (req, res) => {
   const id = parseTransactionId(req.params.id);
   if (!id) {
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "warn",
+        eventType: "transaccion.eliminacion.invalid_id",
+        success: false,
+        statusCode: 400,
+        detail: "Intento de eliminacion con id invalido"
+      })
+    );
+
     return res.status(400).json({
       ok: false,
       message: "Id de transaccion invalido"
@@ -971,6 +1382,17 @@ app.post("/api/transacciones/:id/eliminar", ensureRole([ROLES.ADMIN]), async (re
   try {
     const transaction = await getTransactionById(id);
     if (!transaction) {
+      void persistAuditLogSafely(
+        buildAuditContext(req, {
+          level: "warn",
+          eventType: "transaccion.eliminacion.no_encontrada",
+          success: false,
+          statusCode: 404,
+          transactionId: id,
+          detail: "No se encontro la transaccion solicitada"
+        })
+      );
+
       return res.status(404).json({
         ok: false,
         message: "No se encontro la transaccion solicitada"
@@ -978,6 +1400,18 @@ app.post("/api/transacciones/:id/eliminar", ensureRole([ROLES.ADMIN]), async (re
     }
 
     if (Number(transaction.eliminado) === 1) {
+      void persistAuditLogSafely(
+        buildAuditContext(req, {
+          level: "warn",
+          eventType: "transaccion.eliminacion.ya_eliminada",
+          success: false,
+          statusCode: 409,
+          transactionId: id,
+          codigoEmpleado: transaction.codigo_empleado,
+          detail: "La transaccion ya estaba en eliminados"
+        })
+      );
+
       return res.status(409).json({
         ok: false,
         message: "La transaccion ya fue movida a eliminados"
@@ -985,6 +1419,21 @@ app.post("/api/transacciones/:id/eliminar", ensureRole([ROLES.ADMIN]), async (re
     }
 
     if (transaction.estado !== "exitoso") {
+      void persistAuditLogSafely(
+        buildAuditContext(req, {
+          level: "warn",
+          eventType: "transaccion.eliminacion.estado_no_permitido",
+          success: false,
+          statusCode: 409,
+          transactionId: id,
+          codigoEmpleado: transaction.codigo_empleado,
+          detail: "Solo se pueden eliminar transacciones exitosas",
+          metadata: {
+            estado: transaction.estado
+          }
+        })
+      );
+
       return res.status(409).json({
         ok: false,
         message: "Solo se pueden eliminar transacciones exitosas"
@@ -997,6 +1446,19 @@ app.post("/api/transacciones/:id/eliminar", ensureRole([ROLES.ADMIN]), async (re
     });
 
     if (APP_CONFIG.integrationMode === "api" && !apiDeletionResult?.realizada) {
+      void persistAuditLogSafely(
+        buildAuditContext(req, {
+          level: "warn",
+          eventType: "transaccion.eliminacion.reversa_no_confirmada",
+          success: false,
+          statusCode: 409,
+          transactionId: id,
+          codigoEmpleado: transaction.codigo_empleado,
+          numeroTransaccion: transaction.numero_transaccion,
+          detail: apiDeletionResult?.message || "La API no confirmo la reversa"
+        })
+      );
+
       return res.status(409).json({
         ok: false,
         message: "No se pudo completar reversa en API externa",
@@ -1012,6 +1474,18 @@ app.post("/api/transacciones/:id/eliminar", ensureRole([ROLES.ADMIN]), async (re
     });
 
     if (!result || Number(result.changes) === 0) {
+      void persistAuditLogSafely(
+        buildAuditContext(req, {
+          level: "warn",
+          eventType: "transaccion.eliminacion.sin_cambios",
+          success: false,
+          statusCode: 409,
+          transactionId: id,
+          codigoEmpleado: transaction.codigo_empleado,
+          detail: "No fue posible mover la transaccion a eliminados"
+        })
+      );
+
       return res.status(409).json({
         ok: false,
         message: "No fue posible mover la transaccion a eliminados"
@@ -1019,6 +1493,22 @@ app.post("/api/transacciones/:id/eliminar", ensureRole([ROLES.ADMIN]), async (re
     }
 
     const updated = await getTransactionById(id);
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "info",
+        eventType: "transaccion.eliminacion.exitosa",
+        success: true,
+        statusCode: 200,
+        transactionId: id,
+        codigoEmpleado: updated?.codigo_empleado || transaction.codigo_empleado,
+        numeroTransaccion: updated?.numero_transaccion || transaction.numero_transaccion,
+        detail: "Transaccion movida a eliminados",
+        metadata: {
+          eliminacionDetalle: detail || null
+        }
+      })
+    );
+
     return res.json({
       ok: true,
       message: "Transaccion movida a eliminados",
@@ -1032,6 +1522,20 @@ app.post("/api/transacciones/:id/eliminar", ensureRole([ROLES.ADMIN]), async (re
       Number(error?.status) >= 400 && Number(error?.status) < 600
         ? Number(error.status)
         : 500;
+
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "error",
+        eventType: "transaccion.eliminacion.error",
+        success: false,
+        statusCode: status,
+        transactionId: id,
+        detail: getErrorMessage(error),
+        metadata: {
+          stack: String(error?.stack || "").slice(0, 3000)
+        }
+      })
+    );
 
     return res.status(status).json({
       ok: false,
@@ -1071,8 +1575,36 @@ app.get("/api/historial/export", ensureRole([ROLES.ADMIN]), async (req, res) => 
     );
     res.setHeader("Content-Disposition", `attachment; filename=\"${fileName}\"`);
 
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "info",
+        eventType: "historial.export.success",
+        success: true,
+        statusCode: 200,
+        detail: "Exportacion de historial generada",
+        metadata: {
+          filtros: filters,
+          totalFilas: rows.length,
+          fileName
+        }
+      })
+    );
+
     return res.send(buffer);
   } catch (error) {
+    void persistAuditLogSafely(
+      buildAuditContext(req, {
+        level: "error",
+        eventType: "historial.export.error",
+        success: false,
+        statusCode: 500,
+        detail: getErrorMessage(error),
+        metadata: {
+          stack: String(error?.stack || "").slice(0, 3000)
+        }
+      })
+    );
+
     return res.status(500).json({
       ok: false,
       message: "No se pudo exportar historial",
@@ -1085,12 +1617,54 @@ app.get("*", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
+process.on("unhandledRejection", (reason) => {
+  const detail = reason instanceof Error ? reason.message : String(reason || "");
+
+  void persistAuditLogSafely({
+    level: "error",
+    eventType: "system.unhandled_rejection",
+    success: false,
+    statusCode: 500,
+    detail: detail.slice(0, 2000),
+    metadata: {
+      stack: String(reason?.stack || "").slice(0, 3000)
+    }
+  });
+});
+
+process.on("uncaughtExceptionMonitor", (error, origin) => {
+  void persistAuditLogSafely({
+    level: "error",
+    eventType: "system.uncaught_exception",
+    success: false,
+    statusCode: 500,
+    detail: String(error?.message || "Error no controlado").slice(0, 2000),
+    metadata: {
+      origin: String(origin || ""),
+      stack: String(error?.stack || "").slice(0, 3000)
+    }
+  });
+});
+
 initDb()
   .then(() => {
     void neonSyncWorker.start();
 
     app.listen(PORT, () => {
       console.log(`Servidor activo en http://localhost:${PORT}`);
+
+      void persistAuditLogSafely({
+        level: "info",
+        eventType: "system.startup",
+        success: true,
+        statusCode: 200,
+        detail: `Servidor activo en puerto ${PORT}`,
+        metadata: {
+          port: PORT,
+          integrationMode: APP_CONFIG.integrationMode,
+          soda: APP_CONFIG.soda
+        }
+      });
     });
   })
   .catch((error) => {

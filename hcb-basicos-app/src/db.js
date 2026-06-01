@@ -50,6 +50,35 @@ async function initDb() {
     );
   `);
 
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      fecha_cr TEXT NOT NULL,
+      level TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      success INTEGER NOT NULL DEFAULT 1,
+      username TEXT,
+      user_role TEXT,
+      ip TEXT,
+      method TEXT,
+      path TEXT,
+      status_code INTEGER,
+      codigo_empleado TEXT,
+      transaction_id INTEGER,
+      numero_transaccion TEXT,
+      detail TEXT,
+      metadata TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  await db.exec(
+    "CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at DESC);"
+  );
+  await db.exec("CREATE INDEX IF NOT EXISTS idx_audit_logs_event_type ON audit_logs(event_type);");
+  await db.exec("CREATE INDEX IF NOT EXISTS idx_audit_logs_username ON audit_logs(username);");
+  await db.exec("CREATE INDEX IF NOT EXISTS idx_audit_logs_level ON audit_logs(level);");
+
   await ensureMissingColumns(db);
 
   return db;
@@ -111,6 +140,312 @@ function safeSerialize(value) {
   } catch (_error) {
     return String(value).slice(0, 10000);
   }
+}
+
+function sanitizeAuditText(value, maxLength = 255) {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  return normalized.slice(0, maxLength);
+}
+
+function getCostaRicaDateTimeText(date = new Date()) {
+  const snapshot = getCostaRicaTimeSnapshot(date);
+  return `${snapshot.date} ${snapshot.clock}`;
+}
+
+function normalizeAuditLevel(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["info", "warn", "error"].includes(normalized)) {
+    return normalized;
+  }
+
+  return "info";
+}
+
+function normalizeAuditFilters({ startDate, endDate, level, eventType, username, searchText }) {
+  return {
+    startDate: normalizeDateText(startDate),
+    endDate: normalizeDateText(endDate),
+    level: String(level || "")
+      .trim()
+      .toLowerCase(),
+    eventType: String(eventType || "").trim().toLowerCase(),
+    username: String(username || "")
+      .trim()
+      .toLowerCase(),
+    searchText: String(searchText || "").trim()
+  };
+}
+
+function buildAuditWhereClause(filters) {
+  const where = [];
+  const params = [];
+
+  if (filters.startDate) {
+    where.push("created_at >= ?");
+    params.push(filters.startDate);
+  }
+
+  if (filters.endDate) {
+    where.push("created_at <= ?");
+    params.push(filters.endDate);
+  }
+
+  if (filters.level && ["info", "warn", "error"].includes(filters.level)) {
+    where.push("level = ?");
+    params.push(filters.level);
+  }
+
+  if (filters.eventType) {
+    where.push("event_type = ?");
+    params.push(filters.eventType);
+  }
+
+  if (filters.username) {
+    where.push("username = ?");
+    params.push(filters.username);
+  }
+
+  if (filters.searchText) {
+    where.push(
+      "(event_type LIKE ? OR detail LIKE ? OR username LIKE ? OR codigo_empleado LIKE ? OR path LIKE ?)"
+    );
+    params.push(`%${filters.searchText}%`);
+    params.push(`%${filters.searchText}%`);
+    params.push(`%${filters.searchText}%`);
+    params.push(`%${filters.searchText}%`);
+    params.push(`%${filters.searchText}%`);
+  }
+
+  const sql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+  return { sql, params };
+}
+
+async function saveAuditLog(entry = {}) {
+  const database = await initDb();
+
+  const fechaCr = sanitizeAuditText(entry.fecha_cr || getCostaRicaDateTimeText(new Date()), 19);
+  const level = normalizeAuditLevel(entry.level);
+  const eventType = sanitizeAuditText(entry.eventType, 100).toLowerCase() || "general.event";
+  const success = entry.success === false ? 0 : 1;
+  const username = sanitizeAuditText(entry.username, 80).toLowerCase() || null;
+  const userRole = sanitizeAuditText(entry.userRole, 30).toLowerCase() || null;
+  const ip = sanitizeAuditText(entry.ip, 80) || null;
+  const method = sanitizeAuditText(entry.method, 10).toUpperCase() || null;
+  const requestPath = sanitizeAuditText(entry.path, 180) || null;
+  const statusCode = Number.isInteger(Number(entry.statusCode))
+    ? Number(entry.statusCode)
+    : null;
+  const codigoEmpleado = sanitizeAuditText(entry.codigoEmpleado, 30) || null;
+  const transactionId = Number.isInteger(Number(entry.transactionId))
+    ? Number(entry.transactionId)
+    : null;
+  const numeroTransaccion = sanitizeAuditText(entry.numeroTransaccion, 60) || null;
+  const detail = sanitizeAuditText(entry.detail, 2000) || null;
+  const metadata = safeSerialize(entry.metadata);
+
+  return database.run(
+    `
+      INSERT INTO audit_logs (
+        fecha_cr,
+        level,
+        event_type,
+        success,
+        username,
+        user_role,
+        ip,
+        method,
+        path,
+        status_code,
+        codigo_empleado,
+        transaction_id,
+        numero_transaccion,
+        detail,
+        metadata
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `,
+    [
+      fechaCr,
+      level,
+      eventType,
+      success,
+      username,
+      userRole,
+      ip,
+      method,
+      requestPath,
+      statusCode,
+      codigoEmpleado,
+      transactionId,
+      numeroTransaccion,
+      detail,
+      metadata
+    ]
+  );
+}
+
+async function countAuditLogs({ startDate, endDate, level, eventType, username, searchText } = {}) {
+  const database = await initDb();
+  const normalizedFilters = normalizeAuditFilters({
+    startDate,
+    endDate,
+    level,
+    eventType,
+    username,
+    searchText
+  });
+
+  const { sql: whereSql, params } = buildAuditWhereClause(normalizedFilters);
+  const row = await database.get(
+    `
+      SELECT COUNT(1) AS total
+      FROM audit_logs
+      ${whereSql}
+    `,
+    params
+  );
+
+  return Number(row?.total || 0);
+}
+
+async function getAuditLogs({
+  startDate,
+  endDate,
+  level,
+  eventType,
+  username,
+  searchText,
+  offset = 0,
+  limit = 50
+} = {}) {
+  const database = await initDb();
+  const normalizedFilters = normalizeAuditFilters({
+    startDate,
+    endDate,
+    level,
+    eventType,
+    username,
+    searchText
+  });
+
+  const { sql: whereSql, params } = buildAuditWhereClause(normalizedFilters);
+  const resolvedLimit = clampLimit(limit, 50, 5000);
+  const resolvedOffset = clampOffset(offset, 0);
+
+  params.push(resolvedLimit);
+  params.push(resolvedOffset);
+
+  return database.all(
+    `
+      SELECT
+        id,
+        fecha_cr,
+        level,
+        event_type,
+        success,
+        username,
+        user_role,
+        ip,
+        method,
+        path,
+        status_code,
+        codigo_empleado,
+        transaction_id,
+        numero_transaccion,
+        detail,
+        metadata,
+        created_at
+      FROM audit_logs
+      ${whereSql}
+      ORDER BY id DESC
+      LIMIT ?
+      OFFSET ?
+    `,
+    params
+  );
+}
+
+async function getAuditLogsPaged({
+  startDate,
+  endDate,
+  level,
+  eventType,
+  username,
+  searchText,
+  page = 1,
+  limit = 20
+} = {}) {
+  const resolvedLimit = clampLimit(limit, 20, 200);
+  const total = await countAuditLogs({
+    startDate,
+    endDate,
+    level,
+    eventType,
+    username,
+    searchText
+  });
+
+  const totalPages = Math.max(1, Math.ceil(total / resolvedLimit));
+  const resolvedPage = Math.min(clampPage(page, 1), totalPages);
+  const offset = (resolvedPage - 1) * resolvedLimit;
+
+  const rows = await getAuditLogs({
+    startDate,
+    endDate,
+    level,
+    eventType,
+    username,
+    searchText,
+    limit: resolvedLimit,
+    offset
+  });
+
+  return {
+    rows,
+    total,
+    page: resolvedPage,
+    limit: resolvedLimit,
+    totalPages
+  };
+}
+
+async function getAuditLogsAfterId({ afterId = 0, limit = 100 } = {}) {
+  const database = await initDb();
+  const resolvedAfterId = Number.isInteger(Number(afterId))
+    ? Math.max(0, Number(afterId))
+    : 0;
+  const resolvedLimit = clampLimit(limit, 100, 1000);
+
+  return database.all(
+    `
+      SELECT
+        id,
+        fecha_cr,
+        level,
+        event_type,
+        success,
+        username,
+        user_role,
+        ip,
+        method,
+        path,
+        status_code,
+        codigo_empleado,
+        transaction_id,
+        numero_transaccion,
+        detail,
+        metadata,
+        created_at
+      FROM audit_logs
+      WHERE id > ?
+      ORDER BY id ASC
+      LIMIT ?
+    `,
+    [resolvedAfterId, resolvedLimit]
+  );
 }
 
 async function saveTransaction(transaction) {
@@ -647,5 +982,10 @@ module.exports = {
   getSuccessfulConsumptionsForDate,
   getTransactionsPendingNeonSync,
   markTransactionSyncedForNeon,
-  markTransactionSyncFailedForNeon
+  markTransactionSyncFailedForNeon,
+  saveAuditLog,
+  getAuditLogs,
+  countAuditLogs,
+  getAuditLogsPaged,
+  getAuditLogsAfterId
 };

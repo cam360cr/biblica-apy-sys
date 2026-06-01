@@ -61,6 +61,8 @@ NEON_SYNC_ENABLED=true
 NEON_SYNC_INTERVAL_MS=90000
 NEON_SYNC_BATCH_SIZE=100
 NEON_SYNC_STARTUP_DELAY_MS=15000
+NEON_BACKUP_RETENTION_DAYS=180
+NEON_CLEANUP_INTERVAL_MS=21600000
 SQLITE_DB_PATH=
 
 HCB_INTEGRATION_MODE controla el tipo de prueba:
@@ -106,8 +108,16 @@ El sistema utiliza siempre SQLite para operar rapido en lectura/escritura local.
 Si configura NEON_DATABASE_URL, se activa un proceso en background que:
 
 - Toma transacciones pendientes en SQLite.
-- Hace upsert en Neon en lotes.
+- Hace upsert en Neon en lotes para estado actual.
+- Guarda historial versionado por cambio en Neon para reconstruir estado por momento.
+- Respalda auditoria operativa en Neon.
 - Reintenta cuando Neon esta en standby (plan gratuito) para permitir que "despierte".
+
+Tablas remotas que mantiene:
+
+- transacciones_backup: estado mas reciente por transaccion local.
+- transacciones_backup_historial: versionado temporal (append-only) por cambio sincronizado.
+- audit_logs_backup: respaldo de auditoria (login, errores, validaciones, consumos, eliminaciones, etc).
 
 Variables recomendadas:
 
@@ -116,6 +126,33 @@ Variables recomendadas:
 - NEON_SYNC_INTERVAL_MS: cada cuantos ms correr un ciclo de sync (default 90000).
 - NEON_SYNC_BATCH_SIZE: cantidad maxima por lote (default 100).
 - NEON_SYNC_STARTUP_DELAY_MS: espera inicial al arrancar antes del primer sync (default 15000).
+- NEON_BACKUP_RETENTION_DAYS: dias de retencion para historial y auditoria en Neon (default 180, 0 desactiva limpieza).
+- NEON_CLEANUP_INTERVAL_MS: intervalo de limpieza de retencion en ms (default 21600000 = 6h).
+
+Consulta de estado en un momento especifico (point-in-time):
+
+```sql
+WITH ranked AS (
+  SELECT
+    h.*,
+    ROW_NUMBER() OVER (PARTITION BY h.local_id ORDER BY h.backup_at DESC) AS rn
+  FROM transacciones_backup_historial h
+  WHERE h.backup_at <= TIMESTAMPTZ '2026-06-01 18:30:00+00'
+)
+SELECT *
+FROM ranked
+WHERE rn = 1
+ORDER BY local_id;
+```
+
+Ver historial de cambios de una transaccion puntual:
+
+```sql
+SELECT *
+FROM transacciones_backup_historial
+WHERE local_id = 123
+ORDER BY backup_at DESC;
+```
 
 ## Configuración de consumos
 
@@ -210,6 +247,47 @@ El token se solicita en /api/token con grant_type=hcbauth y se cachea internamen
 - Frontend sin exposición de llaves de API.
 - Uso de helmet y cors.
 - Backend como único consumidor de la API externa.
+
+## Auditoria y trazabilidad
+
+Para control operativo completo, la app guarda auditoria en SQLite (tabla audit_logs), no en .txt.
+
+Por que SQLite y no archivo de texto:
+
+- Menor costo de mantenimiento con mucho volumen.
+- Permite filtros por fecha, usuario, evento y nivel.
+- Facil paginacion y consulta desde endpoint.
+- Evita archivos gigantes y parsing manual.
+
+Eventos auditados (entre otros):
+
+- Inicio de sesion exitoso y fallido.
+- Cierre de sesion.
+- Accesos sin sesion o sin permisos.
+- Validacion de codigo (valido, invalido, sin disponibilidad, error).
+- Registro de consumo (exito y todos los fallos de negocio/API).
+- Eliminacion de transacciones (exito y fallos).
+- Consulta y exportacion de historial.
+- Errores no controlados del proceso.
+
+Cada registro incluye fecha/hora/segundo CR, usuario, rol, IP, endpoint, estado HTTP y detalle.
+
+Endpoint para consultar auditoria (solo admin):
+
+- GET /api/auditoria
+
+Filtros soportados:
+
+- desde, hasta
+- level (info|warn|error)
+- eventType
+- username
+- search o busqueda
+- page, limit
+
+Ejemplo:
+
+GET /api/auditoria?desde=2026-06-01&hasta=2026-06-01&level=error&page=1&limit=20
 
 
 ##
