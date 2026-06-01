@@ -210,3 +210,15 @@ El token se solicita en /api/token con grant_type=hcbauth y se cachea internamen
 - Frontend sin exposición de llaves de API.
 - Uso de helmet y cors.
 - Backend como único consumidor de la API externa.
+
+
+##
+docker compose down --remove-orphans
+
+docker compose build --no-cache --pull
+
+docker compose up -d --force-recreate --remove-orphans
+
+docker image prune -f
+
+docker builder prune -f
