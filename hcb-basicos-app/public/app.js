@@ -96,7 +96,7 @@ const SCAN_BARCODE_FORMATS = [
   "itf"
 ];
 
-const ZXING_BROWSER_UMD_URL = "https://unpkg.com/@zxing/browser@0.2.0/umd/zxing-browser.min.js";
+const ZXING_BROWSER_UMD_URL = "/vendor/zxing/zxing-browser.min.js";
 
 const scanRuntime = {
   stream: null,
