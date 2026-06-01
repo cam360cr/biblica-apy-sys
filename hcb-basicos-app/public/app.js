@@ -96,11 +96,17 @@ const SCAN_BARCODE_FORMATS = [
   "itf"
 ];
 
+const ZXING_BROWSER_UMD_URL = "https://unpkg.com/@zxing/browser@0.2.0/umd/zxing-browser.min.js";
+
 const scanRuntime = {
   stream: null,
   detector: null,
   active: false,
-  timerId: null
+  timerId: null,
+  zxingReader: null,
+  zxingControls: null,
+  zxingLoadPromise: null,
+  engine: ""
 };
 
 const elements = {
@@ -544,6 +550,114 @@ async function getBarcodeDetector() {
   }
 }
 
+function getPreferredZxingFormats(zxingRuntime) {
+  const barcodeFormat = zxingRuntime?.BarcodeFormat;
+  if (!barcodeFormat) {
+    return [];
+  }
+
+  const preferred = [
+    barcodeFormat.CODE_128,
+    barcodeFormat.CODE_39,
+    barcodeFormat.CODABAR,
+    barcodeFormat.EAN_13,
+    barcodeFormat.EAN_8,
+    barcodeFormat.UPC_A,
+    barcodeFormat.UPC_E,
+    barcodeFormat.ITF
+  ];
+
+  return preferred.filter((item) => Number.isInteger(item));
+}
+
+async function loadZxingBrowserRuntime() {
+  if (window.ZXingBrowser) {
+    return window.ZXingBrowser;
+  }
+
+  if (!scanRuntime.zxingLoadPromise) {
+    scanRuntime.zxingLoadPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = ZXING_BROWSER_UMD_URL;
+      script.async = true;
+      script.defer = true;
+      script.onload = () => {
+        if (window.ZXingBrowser) {
+          resolve(window.ZXingBrowser);
+          return;
+        }
+
+        reject(new Error("No se pudo inicializar la libreria de escaneo."));
+      };
+      script.onerror = () => {
+        reject(new Error("No se pudo cargar el lector de codigos para este navegador."));
+      };
+
+      document.head.appendChild(script);
+    }).finally(() => {
+      scanRuntime.zxingLoadPromise = null;
+    });
+  }
+
+  return scanRuntime.zxingLoadPromise;
+}
+
+async function startZxingFallbackScan() {
+  if (!scanRuntime.active || !elements.scanVideo) {
+    return;
+  }
+
+  if (scanRuntime.zxingControls) {
+    return;
+  }
+
+  const zxingRuntime = await loadZxingBrowserRuntime();
+  if (!scanRuntime.active || !elements.scanVideo) {
+    return;
+  }
+
+  const ReaderConstructor = zxingRuntime?.BrowserMultiFormatReader;
+  if (typeof ReaderConstructor !== "function") {
+    throw new Error("No fue posible iniciar la compatibilidad de escaneo en este navegador.");
+  }
+
+  if (!scanRuntime.zxingReader) {
+    scanRuntime.zxingReader = new ReaderConstructor();
+  }
+
+  const preferredFormats = getPreferredZxingFormats(zxingRuntime);
+  if (preferredFormats.length > 0) {
+    scanRuntime.zxingReader.possibleFormats = preferredFormats;
+  }
+
+  scanRuntime.engine = "zxing";
+  scanRuntime.zxingControls = await scanRuntime.zxingReader.decodeFromVideoElement(
+    elements.scanVideo,
+    (result, _error, controls) => {
+      if (!scanRuntime.active) {
+        return;
+      }
+
+      if (controls && !scanRuntime.zxingControls) {
+        scanRuntime.zxingControls = controls;
+      }
+
+      if (!result) {
+        return;
+      }
+
+      const rawValue =
+        typeof result.getText === "function"
+          ? result.getText()
+          : String(result.text || result.rawValue || "");
+
+      if (rawValue) {
+        onBarcodeScanned(rawValue);
+      }
+    }
+  );
+}
+
 async function startScanCameraStream() {
   if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
     throw new Error("Este navegador no permite abrir cámara para escanear.");
@@ -662,11 +776,21 @@ function getCameraOpenErrorMessage(error, permissionState = "") {
 
 function stopScanCameraStream() {
   scanRuntime.active = false;
+  scanRuntime.engine = "";
 
   if (scanRuntime.timerId !== null) {
     window.clearTimeout(scanRuntime.timerId);
     scanRuntime.timerId = null;
   }
+
+  if (scanRuntime.zxingControls && typeof scanRuntime.zxingControls.stop === "function") {
+    try {
+      scanRuntime.zxingControls.stop();
+    } catch (_error) {
+      // Si el lector ya fue detenido, solo se continúa con el cierre.
+    }
+  }
+  scanRuntime.zxingControls = null;
 
   if (scanRuntime.stream) {
     const tracks = scanRuntime.stream.getTracks();
@@ -713,13 +837,29 @@ async function runScanStep() {
 
   const detector = await getBarcodeDetector();
   if (!detector) {
-    setScanModalStatus(
-      "La cámara se abrió, pero este navegador no soporta lectura automática de códigos. Use digitación manual.",
-      "error"
-    );
-    stopScanCameraStream();
+    try {
+      setScanModalStatus(
+        "Este navegador no tiene lector nativo. Cargando compatibilidad de escaneo...",
+        "loading"
+      );
+      await startZxingFallbackScan();
+      if (scanRuntime.active) {
+        setScanModalStatus("Escaneando... acerque el código de barras al recuadro.", "info");
+      }
+    } catch (error) {
+      const detail = String(error?.message || "").trim();
+      const baseMessage =
+        "La cámara se abrió, pero no fue posible habilitar lectura automática en este navegador. Use digitación manual.";
+      setScanModalStatus(detail ? `${baseMessage} ${detail}` : baseMessage, "error");
+      stopScanCameraStream();
+      if (elements.scanModalAction) {
+        elements.scanModalAction.focus();
+      }
+    }
     return;
   }
+
+  scanRuntime.engine = "barcode-detector";
 
   if (!elements.scanVideo || elements.scanVideo.readyState < 2) {
     scheduleScanStep(160);
@@ -754,7 +894,7 @@ async function openScanModal() {
 
     await startScanCameraStream();
     scanRuntime.active = true;
-    setScanModalStatus("Escaneando... acerque el código de barras al recuadro.", "info");
+    setScanModalStatus("Iniciando escáner...", "loading");
     scheduleScanStep(220);
   } catch (error) {
     stopScanCameraStream();
