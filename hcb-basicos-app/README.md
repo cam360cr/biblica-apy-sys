@@ -213,6 +213,8 @@ El token se solicita en /api/token con grant_type=hcbauth y se cachea internamen
 
 
 ##
+git pull
+
 docker compose down --remove-orphans
 
 docker compose build --no-cache --pull
