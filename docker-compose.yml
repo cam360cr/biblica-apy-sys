@@ -1,0 +1,19 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: hcb-basicos-app
+    restart: unless-stopped
+    environment:
+      PORT: "2934"
+      SQLITE_DB_PATH: /data/database.sqlite
+      TZ: America/Costa_Rica
+    ports:
+      - "2934:2934"
+    volumes:
+      - ./hcb-basicos-app/.env:/app/hcb-basicos-app/.env:ro
+      - sqlite_data:/data
+
+volumes:
+  sqlite_data:

@@ -1,0 +1,12 @@
+.git
+.gitignore
+node_modules
+npm-debug.log*
+
+hcb-basicos-app/node_modules
+hcb-basicos-app/build
+hcb-basicos-app/build.zip
+hcb-basicos-app/database.sqlite
+hcb-basicos-app/database.sqlite-shm
+hcb-basicos-app/database.sqlite-wal
+hcb-basicos-app/.env

@@ -1,9 +1,33 @@
 {
-  "name": "biblica-api-sys",
+  "name": "hcb-basicos-app",
+  "version": "1.0.0",
+  "description": "Sistema web para registrar consumos de basicos con la API de Clinica Biblica",
+  "main": "hcb-basicos-app/server.js",
+  "type": "commonjs",
   "private": true,
   "scripts": {
-    "start": "npm --prefix ./hcb-basicos-app start",
-    "dev": "npm --prefix ./hcb-basicos-app run dev",
-    "install:app": "npm --prefix ./hcb-basicos-app install"
+    "start": "node hcb-basicos-app/server.js",
+    "dev": "node hcb-basicos-app/server.js",
+    "build": "node hcb-basicos-app/scripts/build.js",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "axios": "^1.8.2",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "express-session": "^1.18.0",
+    "helmet": "^7.1.0",
+    "pg": "^8.21.0",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.7",
+    "xlsx": "^0.18.5"
   }
 }

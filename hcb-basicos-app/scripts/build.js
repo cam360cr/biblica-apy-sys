@@ -2,12 +2,11 @@ const fs = require("fs");
 const path = require("path");
 
 const projectRoot = path.resolve(__dirname, "..");
+const repoRoot = path.resolve(projectRoot, "..");
 const outputDir = path.join(projectRoot, "build");
 
 const entriesToCopy = [
   "server.js",
-  "package.json",
-  "package-lock.json",
   "README.md",
   ".env.example",
   "public",
@@ -65,6 +64,46 @@ function copyEntry(relativeEntryPath) {
   copyFile(sourcePath, destinationPath);
 }
 
+function readJson(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+function writeBuildPackageJson() {
+  const rootPackagePath = path.join(repoRoot, "package.json");
+  if (!fs.existsSync(rootPackagePath)) {
+    throw new Error("No se encontro package.json en la raiz del repositorio.");
+  }
+
+  const rootPackage = readJson(rootPackagePath);
+  const buildPackage = {
+    name: rootPackage.name || "hcb-basicos-app",
+    version: rootPackage.version || "1.0.0",
+    description:
+      rootPackage.description ||
+      "Sistema web para registrar consumos de basicos con la API de Clinica Biblica",
+    main: "server.js",
+    type: "commonjs",
+    scripts: {
+      start: "node server.js",
+      dev: "node server.js"
+    },
+    engines: rootPackage.engines || { node: ">=18" },
+    dependencies: rootPackage.dependencies || {}
+  };
+
+  const destination = path.join(outputDir, "package.json");
+  fs.writeFileSync(destination, `${JSON.stringify(buildPackage, null, 2)}\n`, "utf8");
+}
+
+function copyRootPackageLockIfExists() {
+  const rootLockPath = path.join(repoRoot, "package-lock.json");
+  if (!fs.existsSync(rootLockPath)) {
+    return;
+  }
+
+  copyFile(rootLockPath, path.join(outputDir, "package-lock.json"));
+}
+
 function build() {
   removeDirIfExists(outputDir);
   ensureDir(outputDir);
@@ -72,6 +111,9 @@ function build() {
   for (const entry of entriesToCopy) {
     copyEntry(entry);
   }
+
+  writeBuildPackageJson();
+  copyRootPackageLockIfExists();
 
   console.log("Build generado correctamente en:", outputDir);
 }

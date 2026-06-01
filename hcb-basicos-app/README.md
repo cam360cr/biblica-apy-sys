@@ -7,6 +7,7 @@ Sistema web de caja para registrar consumos usando la API de Básicos de Hospita
 - Backend con Node.js + Express.
 - Frontend vanilla (HTML, CSS y JavaScript).
 - Persistencia en SQLite para historial local.
+- Respaldo opcional en Neon Postgres sincronizado en background (SQLite sigue siendo fuente primaria).
 - Monto fijo por tipo de consumo (sin digitación manual).
 - Botón visual de escaneo junto al código (demo de cámara/láser).
 - Flujo código primero: se verifica y luego se habilitan consumos disponibles.
@@ -30,13 +31,11 @@ Sistema web de caja para registrar consumos usando la API de Básicos de Hospita
 
 ## Instalación
 
-1. npm install
-2. cp .env.example .env
-3. npm start
-
-En PowerShell puede usar:
-
-1. Copy-Item .env.example .env
+1. Desde la raiz del repositorio, ejecute: npm install
+2. Copie variables de entorno:
+  - macOS/Linux: cp hcb-basicos-app/.env.example hcb-basicos-app/.env
+  - PowerShell: Copy-Item hcb-basicos-app/.env.example hcb-basicos-app/.env
+3. Desde la raiz del repositorio, ejecute: npm start
 
 La aplicación queda en http://localhost:2934
 
@@ -57,6 +56,12 @@ APP_SELLER_USER=vendedor
 APP_SELLER_PASSWORD=vendedor123
 SESSION_SECRET=colocar_un_secreto_largo_aqui
 PORT=2934
+NEON_DATABASE_URL=colocar_connection_string_neon
+NEON_SYNC_ENABLED=true
+NEON_SYNC_INTERVAL_MS=90000
+NEON_SYNC_BATCH_SIZE=100
+NEON_SYNC_STARTUP_DELAY_MS=15000
+SQLITE_DB_PATH=
 
 HCB_INTEGRATION_MODE controla el tipo de prueba:
 
@@ -66,6 +71,51 @@ HCB_INTEGRATION_MODE controla el tipo de prueba:
 Para pruebas locales sin credenciales, configure:
 
 HCB_INTEGRATION_MODE=local
+
+SQLITE_DB_PATH es opcional. Si no se define, el sistema usa hcb-basicos-app/database.sqlite.
+En Docker se recomienda definir SQLITE_DB_PATH=/data/database.sqlite para persistir en volumen.
+
+## Docker (VPS puerto 2934)
+
+Prerequisitos:
+
+- Docker Engine instalado
+- Docker Compose v2 (comando docker compose)
+
+Pasos desde la raiz del repositorio:
+
+1. Copiar variables: Copy-Item hcb-basicos-app/.env.example hcb-basicos-app/.env
+2. Editar hcb-basicos-app/.env con credenciales reales
+3. Construir imagen: docker compose build
+4. Levantar servicio: docker compose up -d
+5. Ver logs: docker compose logs -f
+
+El servicio queda publicado en:
+
+- http://IP_DEL_VPS:2934
+
+Comandos utiles:
+
+- Bajar servicio: docker compose down
+- Reiniciar: docker compose restart
+
+## Sincronizacion en Neon (opcional)
+
+El sistema utiliza siempre SQLite para operar rapido en lectura/escritura local.
+
+Si configura NEON_DATABASE_URL, se activa un proceso en background que:
+
+- Toma transacciones pendientes en SQLite.
+- Hace upsert en Neon en lotes.
+- Reintenta cuando Neon esta en standby (plan gratuito) para permitir que "despierte".
+
+Variables recomendadas:
+
+- NEON_DATABASE_URL: connection string de Neon Postgres.
+- NEON_SYNC_ENABLED: true/false para activar o desactivar la sincronizacion.
+- NEON_SYNC_INTERVAL_MS: cada cuantos ms correr un ciclo de sync (default 90000).
+- NEON_SYNC_BATCH_SIZE: cantidad maxima por lote (default 100).
+- NEON_SYNC_STARTUP_DELAY_MS: espera inicial al arrancar antes del primer sync (default 15000).
 
 ## Configuración de consumos
 

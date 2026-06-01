@@ -954,7 +954,7 @@ function validateRegistroInputs() {
   return true;
 }
 
-async function handleVerifyCodigo({ keepMainStatus = false } = {}) {
+async function handleVerifyCodigo({ keepMainStatus = false, fromSuccessfulRegister = false } = {}) {
   if (state.isSubmitting) {
     return;
   }
@@ -994,13 +994,25 @@ async function handleVerifyCodigo({ keepMainStatus = false } = {}) {
     const employeeName = String(payload.data.nombreEmpleado || "").trim();
     const employeeStatusMessage = payload.data.mensajeEstado || "Código validado.";
     const unavailableMessage = "El código no está habilitado para consumir en este momento.";
+    const noMoreConsumesAfterSuccessMessage =
+      "Consumo registrado correctamente. Ya no hay más consumos disponibles para hoy.";
+    const showPostSuccessNoMoreConsumes =
+      fromSuccessfulRegister && !state.canConsume && isValidAndActive;
     const showUnavailableAfterName = employeeName && !state.canConsume && isValidAndActive;
-    const employeeDisplayMessage = employeeName
-      ? showUnavailableAfterName
-        ? `Empleado: ${employeeName}. ${unavailableMessage}`
-        : `Empleado: ${employeeName}.`
-      : employeeStatusMessage;
-    const employeeStatusType = state.canConsume && isValidAndActive ? "success" : "error";
+    const employeeDisplayMessage = showPostSuccessNoMoreConsumes
+      ? employeeName
+        ? `Empleado: ${employeeName}. ${noMoreConsumesAfterSuccessMessage}`
+        : noMoreConsumesAfterSuccessMessage
+      : employeeName
+        ? showUnavailableAfterName
+          ? `Empleado: ${employeeName}. ${unavailableMessage}`
+          : `Empleado: ${employeeName}.`
+        : employeeStatusMessage;
+    const employeeStatusType = showPostSuccessNoMoreConsumes
+      ? "success"
+      : state.canConsume && isValidAndActive
+        ? "success"
+        : "error";
 
     setEmployeeCheckStatus(employeeDisplayMessage, employeeStatusType);
 
@@ -1653,7 +1665,10 @@ async function handleRegister(consumoKey) {
     setSubmitting(false);
   }
 
-  await handleVerifyCodigo({ keepMainStatus: true });
+  await handleVerifyCodigo({
+    keepMainStatus: true,
+    fromSuccessfulRegister: wasSuccessful
+  });
 
   if (wasSuccessful && isAdmin()) {
     await loadHistory();

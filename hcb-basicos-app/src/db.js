@@ -1,9 +1,13 @@
+const fs = require("fs");
 const path = require("path");
 const sqlite3 = require("sqlite3");
 const { open } = require("sqlite");
 const { COSTA_RICA_UTC_OFFSET_MINUTES, getCostaRicaTimeSnapshot } = require("./config");
 
-const DB_PATH = path.join(__dirname, "..", "database.sqlite");
+const SQLITE_DB_PATH = String(process.env.SQLITE_DB_PATH || "").trim();
+const DB_PATH = SQLITE_DB_PATH
+  ? path.resolve(SQLITE_DB_PATH)
+  : path.join(__dirname, "..", "database.sqlite");
 
 let db;
 
@@ -11,6 +15,8 @@ async function initDb() {
   if (db) {
     return db;
   }
+
+  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 
   db = await open({
     filename: DB_PATH,
@@ -36,7 +42,11 @@ async function initDb() {
       eliminado_por TEXT,
       eliminacion_detalle TEXT,
       respuesta_api_eliminacion TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      neon_needs_sync INTEGER NOT NULL DEFAULT 1,
+      neon_synced_at DATETIME,
+      neon_sync_attempts INTEGER NOT NULL DEFAULT 0,
+      neon_sync_error TEXT
     );
   `);
 
@@ -64,6 +74,22 @@ async function ensureMissingColumns(database) {
     {
       name: "respuesta_api_eliminacion",
       sql: "ALTER TABLE transacciones ADD COLUMN respuesta_api_eliminacion TEXT"
+    },
+    {
+      name: "neon_needs_sync",
+      sql: "ALTER TABLE transacciones ADD COLUMN neon_needs_sync INTEGER NOT NULL DEFAULT 1"
+    },
+    {
+      name: "neon_synced_at",
+      sql: "ALTER TABLE transacciones ADD COLUMN neon_synced_at DATETIME"
+    },
+    {
+      name: "neon_sync_attempts",
+      sql: "ALTER TABLE transacciones ADD COLUMN neon_sync_attempts INTEGER NOT NULL DEFAULT 0"
+    },
+    {
+      name: "neon_sync_error",
+      sql: "ALTER TABLE transacciones ADD COLUMN neon_sync_error TEXT"
     }
   ];
 
@@ -486,7 +512,11 @@ async function softDeleteTransaction({ id, deletedBy, detail, apiDeletionResult 
         eliminado_at = CURRENT_TIMESTAMP,
         eliminado_por = ?,
         eliminacion_detalle = ?,
-        respuesta_api_eliminacion = ?
+        respuesta_api_eliminacion = ?,
+        neon_needs_sync = 1,
+        neon_synced_at = NULL,
+        neon_sync_attempts = 0,
+        neon_sync_error = NULL
       WHERE id = ?
         AND eliminado = 0
     `,
@@ -526,6 +556,84 @@ async function getSuccessfulConsumptionsForDate({ codigo, targetDate = new Date(
     .filter(Boolean);
 }
 
+async function getTransactionsPendingNeonSync(limit = 100) {
+  const database = await initDb();
+  const resolvedLimit = clampLimit(limit, 100, 1000);
+
+  return database.all(
+    `
+      SELECT
+        id,
+        fecha,
+        nombre_empleado,
+        codigo_empleado,
+        tipo_consumo,
+        tipo_basico,
+        monto,
+        soda,
+        estado,
+        respuesta_api,
+        numero_transaccion,
+        eliminado,
+        eliminado_at,
+        eliminado_por,
+        eliminacion_detalle,
+        respuesta_api_eliminacion,
+        created_at,
+        neon_sync_attempts
+      FROM transacciones
+      WHERE neon_needs_sync = 1
+      ORDER BY id ASC
+      LIMIT ?
+    `,
+    [resolvedLimit]
+  );
+}
+
+async function markTransactionSyncedForNeon(id) {
+  const parsedId = Number(id);
+  if (!Number.isInteger(parsedId) || parsedId <= 0) {
+    return { changes: 0 };
+  }
+
+  const database = await initDb();
+  return database.run(
+    `
+      UPDATE transacciones
+      SET
+        neon_needs_sync = 0,
+        neon_synced_at = CURRENT_TIMESTAMP,
+        neon_sync_error = NULL
+      WHERE id = ?
+    `,
+    [parsedId]
+  );
+}
+
+async function markTransactionSyncFailedForNeon({ id, errorMessage }) {
+  const parsedId = Number(id);
+  if (!Number.isInteger(parsedId) || parsedId <= 0) {
+    return { changes: 0 };
+  }
+
+  const database = await initDb();
+  const safeMessage = String(errorMessage || "Error desconocido al sincronizar con Neon")
+    .trim()
+    .slice(0, 2000);
+
+  return database.run(
+    `
+      UPDATE transacciones
+      SET
+        neon_needs_sync = 1,
+        neon_sync_attempts = COALESCE(neon_sync_attempts, 0) + 1,
+        neon_sync_error = ?
+      WHERE id = ?
+    `,
+    [safeMessage || "Error desconocido al sincronizar con Neon", parsedId]
+  );
+}
+
 module.exports = {
   DB_PATH,
   initDb,
@@ -536,5 +644,8 @@ module.exports = {
   getTransactionsPaged,
   getTransactionById,
   softDeleteTransaction,
-  getSuccessfulConsumptionsForDate
+  getSuccessfulConsumptionsForDate,
+  getTransactionsPendingNeonSync,
+  markTransactionSyncedForNeon,
+  markTransactionSyncFailedForNeon
 };

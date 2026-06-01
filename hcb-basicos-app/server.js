@@ -1,6 +1,5 @@
-require("dotenv").config();
-
 const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, ".env") });
 const express = require("express");
 const helmet = require("helmet");
 const cors = require("cors");
@@ -23,8 +22,12 @@ const {
   getTransactionsPaged,
   getTransactionById,
   softDeleteTransaction,
-  getSuccessfulConsumptionsForDate
+  getSuccessfulConsumptionsForDate,
+  getTransactionsPendingNeonSync,
+  markTransactionSyncedForNeon,
+  markTransactionSyncFailedForNeon
 } = require("./src/db");
+const { createNeonSyncWorker } = require("./src/neonSync");
 const {
   registrarConsumoEnApi,
   consultarEstadoEmpleadoEnApi,
@@ -40,6 +43,11 @@ const {
 
 const app = express();
 const PORT = Number(process.env.PORT) || 2934;
+const neonSyncWorker = createNeonSyncWorker({
+  getTransactionsPendingNeonSync,
+  markTransactionSyncedForNeon,
+  markTransactionSyncFailedForNeon
+});
 
 app.use(
   helmet({
@@ -422,6 +430,15 @@ function getConsumoHorarioLabel(consumoKey) {
   return `${horario.start}-${horario.end} CR`;
 }
 
+function shouldEnforceLocalConsumptionLock(disponibilidadApi) {
+  if (APP_CONFIG.integrationMode !== "api") {
+    return true;
+  }
+
+  // Si API externa indica disponible, se prioriza ese estado aunque exista registro local.
+  return disponibilidadApi?.puedeConsumirEnApi !== true;
+}
+
 function buildConsumoAvailability({
   consumosConsumidosHoy,
   blockedReason = "",
@@ -439,6 +456,7 @@ function buildConsumoAvailability({
     const enHorario = isConsumoInSchedule(key, now);
     const horario = getConsumoHorarioLabel(key);
     const disponibilidadApi = remoteDisponibilidad?.[key] || null;
+    const enforceLocalConsumptionLock = shouldEnforceLocalConsumptionLock(disponibilidadApi);
 
     let disponible = true;
     let motivo = "Disponible";
@@ -449,15 +467,15 @@ function buildConsumoAvailability({
     } else if (!enHorario) {
       disponible = false;
       motivo = `Fuera de horario (${horario})`;
-    } else if (consumidoHoy) {
-      disponible = false;
-      motivo = "Ya consumido hoy";
     } else if (disponibilidadApi?.puedeConsumirEnApi === false) {
       disponible = false;
       motivo = "No disponible";
     } else if (requireApiAvailability && disponibilidadApi?.puedeConsumirEnApi === null) {
       disponible = false;
       motivo = "No disponible";
+    } else if (consumidoHoy && enforceLocalConsumptionLock) {
+      disponible = false;
+      motivo = "Ya consumido hoy";
     }
 
     return {
@@ -814,26 +832,29 @@ app.post("/api/consumo", ensureRole([ROLES.ADMIN, ROLES.SELLER]), async (req, re
       }
     }
 
-    const consumosConsumidosHoy = await getSuccessfulConsumptionsForDate({ codigo });
-    if (consumosConsumidosHoy.includes(consumo)) {
-      const detail = `El consumo ${consumoConfig.label} ya fue registrado hoy para el codigo ${codigo}.`;
+    const enforceLocalConsumptionLock = shouldEnforceLocalConsumptionLock(disponibilidadApiConsumo);
+    if (enforceLocalConsumptionLock) {
+      const consumosConsumidosHoy = await getSuccessfulConsumptionsForDate({ codigo });
+      if (consumosConsumidosHoy.includes(consumo)) {
+        const detail = `El consumo ${consumoConfig.label} ya fue registrado hoy para el codigo ${codigo}.`;
 
-      await persistTransactionSafely({
-        ...transactionWithName,
-        estado: "fallido",
-        respuesta_api: {
-          message: detail,
-          details: null,
-          status: 409
-        },
-        numero_transaccion: null
-      });
+        await persistTransactionSafely({
+          ...transactionWithName,
+          estado: "fallido",
+          respuesta_api: {
+            message: detail,
+            details: null,
+            status: 409
+          },
+          numero_transaccion: null
+        });
 
-      return res.status(409).json({
-        ok: false,
-        message: "Consumo ya registrado hoy",
-        detail
-      });
+        return res.status(409).json({
+          ok: false,
+          message: "Consumo ya registrado hoy",
+          detail
+        });
+      }
     }
 
     const apiResponse = await registrarConsumoEnApi({
@@ -1044,6 +1065,8 @@ app.get("*", (_req, res) => {
 
 initDb()
   .then(() => {
+    void neonSyncWorker.start();
+
     app.listen(PORT, () => {
       console.log(`Servidor activo en http://localhost:${PORT}`);
     });
