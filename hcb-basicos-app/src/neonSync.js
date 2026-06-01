@@ -5,6 +5,7 @@ const DEFAULT_BATCH_SIZE = 100;
 const DEFAULT_STARTUP_DELAY_MS = 15 * 1000;
 const DEFAULT_BACKUP_RETENTION_DAYS = 180;
 const DEFAULT_CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const COSTA_RICA_UTC_OFFSET_MINUTES = -6 * 60;
 
 const CREATE_REMOTE_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS transacciones_backup (
@@ -377,10 +378,68 @@ function toSafeText(value) {
   return text === "" ? null : text;
 }
 
+function parseDateValue(value) {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  const sqliteUtcPattern = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(\.\d{1,3})?$/;
+  const sqliteMatch = sqliteUtcPattern.exec(raw);
+  if (sqliteMatch) {
+    const sqliteIso = `${sqliteMatch[1]}T${sqliteMatch[2]}${sqliteMatch[3] || ""}Z`;
+    const parsedSqliteDate = new Date(sqliteIso);
+    if (!Number.isNaN(parsedSqliteDate.getTime())) {
+      return parsedSqliteDate;
+    }
+  }
+
+  const isoWithoutZonePattern = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?)$/;
+  const isoWithoutZoneMatch = isoWithoutZonePattern.exec(raw);
+  if (isoWithoutZoneMatch) {
+    const parsedIsoNoZoneDate = new Date(`${isoWithoutZoneMatch[1]}T${isoWithoutZoneMatch[2]}Z`);
+    if (!Number.isNaN(parsedIsoNoZoneDate.getTime())) {
+      return parsedIsoNoZoneDate;
+    }
+  }
+
+  const parsedDate = new Date(raw);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return null;
+  }
+
+  return parsedDate;
+}
+
+function padTwo(value) {
+  return String(value).padStart(2, "0");
+}
+
+function toCostaRicaDateTimeText(value) {
+  const parsed = parseDateValue(value);
+  if (!parsed) {
+    return toSafeText(value);
+  }
+
+  const costaRicaDate = new Date(parsed.getTime() + COSTA_RICA_UTC_OFFSET_MINUTES * 60 * 1000);
+  const year = costaRicaDate.getUTCFullYear();
+  const month = padTwo(costaRicaDate.getUTCMonth() + 1);
+  const day = padTwo(costaRicaDate.getUTCDate());
+  const hour = padTwo(costaRicaDate.getUTCHours());
+  const minute = padTwo(costaRicaDate.getUTCMinutes());
+  const second = padTwo(costaRicaDate.getUTCSeconds());
+
+  return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+}
+
 function mapTransactionToUpsertParams(transaction) {
   return [
     Number(transaction.id),
-    String(transaction.fecha || ""),
+    toCostaRicaDateTimeText(transaction.fecha) || "",
     toSafeText(transaction.nombre_empleado),
     String(transaction.codigo_empleado || ""),
     String(transaction.tipo_consumo || ""),
@@ -391,11 +450,11 @@ function mapTransactionToUpsertParams(transaction) {
     toSafeText(transaction.respuesta_api),
     toSafeText(transaction.numero_transaccion),
     Number(transaction.eliminado || 0),
-    toSafeText(transaction.eliminado_at),
+    toCostaRicaDateTimeText(transaction.eliminado_at),
     toSafeText(transaction.eliminado_por),
     toSafeText(transaction.eliminacion_detalle),
     toSafeText(transaction.respuesta_api_eliminacion),
-    toSafeText(transaction.created_at),
+    toCostaRicaDateTimeText(transaction.created_at),
     Number(transaction.neon_sync_attempts || 0)
   ];
 }
@@ -418,7 +477,7 @@ function mapAuditLogToUpsertParams(auditLog) {
     toSafeText(auditLog.numero_transaccion),
     toSafeText(auditLog.detail),
     toSafeText(auditLog.metadata),
-    toSafeText(auditLog.created_at)
+    toCostaRicaDateTimeText(auditLog.created_at)
   ];
 }
 

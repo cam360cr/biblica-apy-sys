@@ -302,3 +302,53 @@ docker compose up -d --force-recreate --remove-orphans
 docker image prune -f
 
 docker builder prune -f
+
+
+#
+Sí. Aquí tienes las 3 consultas listas.
+
+1. Ver el estado actual de una transacción o de todo el backup actual:
+
+```sql
+SELECT *
+FROM transacciones_backup
+ORDER BY local_id DESC;
+```
+
+2. Ver cómo estaba la información en un momento exacto:
+
+```sql
+WITH ranked AS (
+  SELECT
+    h.*,
+    ROW_NUMBER() OVER (
+      PARTITION BY h.local_id
+      ORDER BY h.backup_at DESC
+    ) AS rn
+  FROM transacciones_backup_historial h
+  WHERE h.backup_at <= TIMESTAMPTZ '2026-06-01 18:30:00+00'
+)
+SELECT *
+FROM ranked
+WHERE rn = 1
+ORDER BY local_id;
+```
+
+3. Ver el historial completo de una transacción puntual:
+
+```sql
+SELECT *
+FROM transacciones_backup_historial
+WHERE local_id = 123
+ORDER BY backup_at DESC;
+```
+
+Y para auditoría operativa:
+
+```sql
+SELECT *
+FROM audit_logs_backup
+ORDER BY created_at DESC;
+```
+
+Si quieres, te preparo ahora mismo una versión filtrada por código de empleado, por fecha o por usuario.

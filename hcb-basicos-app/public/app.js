@@ -1135,7 +1135,7 @@ async function handleVerifyCodigo({ keepMainStatus = false, fromSuccessfulRegist
     const employeeStatusMessage = payload.data.mensajeEstado || "Código validado.";
     const unavailableMessage = "El código no está habilitado para consumir en este momento.";
     const noMoreConsumesAfterSuccessMessage =
-      "Consumo registrado correctamente. Ya no hay más consumos disponibles para hoy.";
+      "Consumo registrado correctamente. Ya no hay más consumos disponibles en este momento.";
     const showPostSuccessNoMoreConsumes =
       fromSuccessfulRegister && !state.canConsume && isValidAndActive;
     const showUnavailableAfterName = employeeName && !state.canConsume && isValidAndActive;
