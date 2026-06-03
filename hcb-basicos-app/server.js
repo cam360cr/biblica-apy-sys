@@ -498,13 +498,31 @@ function parseTransactionId(value) {
   return parsed;
 }
 
+function formatTimeToAmPm(timeValue) {
+  const match = /^(\d{2}):(\d{2})$/.exec(String(timeValue || "").trim());
+  if (!match) {
+    return String(timeValue || "").trim();
+  }
+
+  const hour24 = Number.parseInt(match[1], 10);
+  const minute = match[2];
+
+  if (!Number.isInteger(hour24) || hour24 < 0 || hour24 > 23) {
+    return String(timeValue || "").trim();
+  }
+
+  const suffix = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return `${hour12}:${minute} ${suffix}`;
+}
+
 function getConsumoHorarioLabel(consumoKey) {
   const horario = CONSUMO_HORARIOS_CR[String(consumoKey || "").trim().toLowerCase()];
   if (!horario) {
     return "Horario no definido";
   }
 
-  return `${horario.start}-${horario.end} CR`;
+  return `${formatTimeToAmPm(horario.start)}-${formatTimeToAmPm(horario.end)} CR`;
 }
 
 function shouldEnforceLocalConsumptionLock(disponibilidadApi) {

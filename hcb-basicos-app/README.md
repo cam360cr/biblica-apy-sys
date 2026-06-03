@@ -306,6 +306,12 @@ docker image prune -f
 docker builder prune -f
 
 
+Seguir logs en vivo del servicio:
+docker compose logs -f hcb-basicos-app
+Si quieres solo llamadas API en vivo:
+docker compose logs -f hcb-basicos-app | grep "/api/"
+
+
 #
 Sí. Aquí tienes las 3 consultas listas.
 
