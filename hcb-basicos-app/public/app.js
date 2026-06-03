@@ -1366,9 +1366,13 @@ function renderConsumos(consumosDisponibles = []) {
       const disponible = Boolean(consumo.disponible);
       const montoDefault = toPositiveAmount(consumo.montoDefault);
       const motivoBase = consumo.motivo || (disponible ? "Disponible" : "No disponible");
-      const motivo = montoDefault
-        ? `${motivoBase}. Monto por defecto: ${formatMonto(montoDefault)}`
+      const horario = String(consumo.horario || "").trim();
+      const motivoConHorario = horario
+        ? `${motivoBase}. Horario: ${horario}`
         : motivoBase;
+      const motivo = montoDefault
+        ? `${motivoConHorario}. Monto por defecto: ${formatMonto(montoDefault)}`
+        : motivoConHorario;
       const disabledClass = disponible ? "" : " not-available";
       const metaClass = disponible ? "is-available" : "is-unavailable";
 

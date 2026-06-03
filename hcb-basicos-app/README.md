@@ -291,6 +291,8 @@ GET /api/auditoria?desde=2026-06-01&hasta=2026-06-01&level=error&page=1&limit=20
 
 
 ##
+
+cd /home/loshinchassportbar-biblica/htdocs/biblica.loshinchassportbar.com/biblica-apy-sys
 git pull
 
 docker compose down --remove-orphans
